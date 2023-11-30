@@ -23,6 +23,6 @@ More info [here](https://html5up.net/license).
 CICD
 ----------------------
 requirement:
-heroku account
-HEROKU_API_KEY variable define in gitlab (for exemple: 12345-azerty-67890-iuiop)
-IMAGE_NAME variable define in gitlab (for exemple: registry.gitlab.com/aurelienlm/static-website-example)
+- heroku account
+- HEROKU_API_KEY variable define in gitlab (for exemple: 12345-azerty-67890-iuiop)
+- IMAGE_NAME variable define in gitlab (for exemple: registry.gitlab.com/yourlogin-or-group/static-website-example)
