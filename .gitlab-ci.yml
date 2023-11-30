@@ -1,0 +1,152 @@
+stages:
+  - app-build
+  - app-test
+  - app-release
+  - deploy-review
+  - test-review
+  - delete-review
+  - deploy-staging
+  - test-staging
+  - deploy-prod
+  - test-prod
+
+.test_template: &test
+  image: alpine
+  only:
+    - master
+  script:
+    - apk --no-cache add curl
+    - curl "$DOMAIN" | grep -i "AurLM"
+
+image: docker:latest
+
+services:
+  - name: docker:dind
+    alias: docker-ctr
+
+docker-app-build:
+  stage: app-build
+  script:
+    - docker build -t static-website-example .
+    - docker save static-website-example > static-website-example.tar
+  artifacts:
+    paths:
+      - static-website-example.tar
+    when: on_success
+    expire_in: "1 days"
+
+docker-app-test:
+  stage: app-test
+  script:
+    - docker load < static-website-example.tar
+    - docker run -d -p 80:80 -e PORT=80 --name webapp static-website-example
+    - sleep 5
+    - apk --no-cache add curl
+    - curl "http://docker-ctr" | grep -i "AurLM"
+
+docker-app-release:
+  stage: app-release
+  script:
+    - docker load < static-website-example.tar
+    - docker tag static-website-example "${IMAGE_NAME}:${CI_COMMIT_REF_NAME}"
+    - docker tag static-website-example "${IMAGE_NAME}:${CI_COMMIT_SHORT_SHA}"
+    - echo "$CI_REGISTRY_PASSWORD" | docker login --username "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
+    - docker push "${IMAGE_NAME}:${CI_COMMIT_REF_NAME}"
+    - docker push "${IMAGE_NAME}:${CI_COMMIT_SHORT_SHA}"
+
+deploy-staging:
+  stage: deploy-staging
+  environment:
+    name: staging
+    url: $STAGING_URL
+  only: 
+      - master
+  script:
+    - apk --no-cache add npm
+    - npm install -g heroku
+    - heroku container:login
+    - heroku create aurlm-staging || echo "project already exist"
+    - heroku container:push -a aurlm-staging web
+    - heroku container:release -a aurlm-staging web
+    - staging=`heroku apps:info --app aurlm-staging | grep -Eo "(http|https)://[a-zA-Z0-9./?=_%:-]*" | grep -v .git`
+    - echo "STAGING_URL=$staging" >> staging.env
+  artifacts:
+    reports:
+      dotenv: staging.env
+
+deploy-prod:
+  stage: deploy-prod
+  environment:
+    name: prod
+    url: $PROD_URL
+  only: 
+      - master
+  script:
+    - apk --no-cache add npm
+    - npm install -g heroku
+    - heroku container:login
+    - heroku create aurlm-prod || echo "project already exist"
+    - heroku container:push -a aurlm-prod web
+    - heroku container:release -a aurlm-prod web
+    - prod_url=`heroku apps:info --app aurlm-prod | grep -Eo "(http|https)://[a-zA-Z0-9./?=_%:-]*" | grep -v .git`
+    - echo "PROD_URL=$prod_url" >> prod_url.env
+  artifacts:
+    reports:
+      dotenv: prod_url.env
+
+deploy-review:
+  stage: deploy-review
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    url: $REVIEW_URL
+    on_stop: delete-review
+  only: 
+      - merge_requests
+  script:
+    - apk --no-cache add npm
+    - npm install -g heroku
+    - heroku container:login
+    - heroku create aurlm-$CI_COMMIT_REF_NAME || echo "project already exist"
+    - heroku container:push -a aurlm-$CI_COMMIT_REF_NAME web
+    - heroku container:release -a aurlm-$CI_COMMIT_REF_NAME web
+    - review=`heroku apps:info --app aurlm-$CI_COMMIT_REF_NAME | grep -Eo "(http|https)://[a-zA-Z0-9./?=_%:-]*" | grep -v .git`
+    - echo "REVIEW_URL=$review" >> review.env
+  artifacts:
+    reports:
+      dotenv: review.env
+ 
+delete-review:
+  stage: delete-review
+  variables:
+    GIT_STRATEGY: none
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    action: stop
+  only: 
+      - merge_requests
+  when: manual
+  script:
+    - apk --no-cache add npm
+    - npm install -g heroku
+    - heroku container:login
+    - heroku apps:destroy -a aurlm-$CI_COMMIT_REF_NAME -c aurlm-$CI_COMMIT_REF_NAME
+
+test-review:
+  <<: *test
+  stage: test-review
+  only: 
+   - merge_requests
+  variables:
+    DOMAIN: ${REVIEW_URL}
+
+test-staging:
+  <<: *test
+  stage: test-staging
+  variables:
+    DOMAIN: ${STAGING_URL}
+
+test-prod:
+  <<: *test
+  stage: test-prod
+  variables:
+    DOMAIN: ${PROD_URL}
